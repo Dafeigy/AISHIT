@@ -3,6 +3,8 @@ import * as THREE from "three"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
 
 import windTurbineUrl from "@/assets/models/wind_turbine.glb?url"
+import windFarmCoordinatesRaw from "@/assets/coordinates/turbines_xy.json — 风机 XY + 经纬度.json — 风机 XY + 经纬度.json — 风机 XY + 经纬度?raw"
+import type { WindFarmAsset } from "@/src/data/turbine-mock-data"
 
 const TURBINE_HEIGHT = 7.5
 const OCEAN_WIDTH = 360
@@ -12,20 +14,34 @@ const TURBINE_REFERENCE_POSITION = new THREE.Vector3(8, -1.05, -27)
 // beside the vertical sink offset so future turbine variants can reuse both.
 const TURBINE_WORLD_Z_OFFSET = -27
 const TURBINE_VERTICAL_SINK_OFFSET_Y = -0.65
-const TURBINE_POSITION = new THREE.Vector3(
-  TURBINE_REFERENCE_POSITION.x,
-  TURBINE_REFERENCE_POSITION.y + TURBINE_VERTICAL_SINK_OFFSET_Y,
-  TURBINE_WORLD_Z_OFFSET,
-)
+const FARM_COORDINATE_SCALE = 0.01
+const TURBINE_BASE_Y = TURBINE_REFERENCE_POSITION.y + TURBINE_VERTICAL_SINK_OFFSET_Y
+const SUBSTATION_HEIGHT = 2.4
 const ROTOR_SPEED = 0.58
 
+const windFarmAssets = JSON.parse(windFarmCoordinatesRaw) as WindFarmAsset[]
+const turbineCoordinates = windFarmAssets.filter(({ name }) => name.includes("风机"))
+const substationCoordinates = windFarmAssets.find(({ name }) => name.includes("升压站"))
+
+function toWorldPosition({ x, y }: Pick<WindFarmAsset, "x" | "y">, worldY: number) {
+  return new THREE.Vector3(
+    TURBINE_REFERENCE_POSITION.x + x * FARM_COORDINATE_SCALE,
+    worldY,
+    TURBINE_WORLD_Z_OFFSET - y * FARM_COORDINATE_SCALE,
+  )
+}
+
 function disposeObject(root: THREE.Object3D) {
+  const disposedGeometries = new Set<THREE.BufferGeometry>()
   const disposedMaterials = new Set<THREE.Material>()
   const disposedTextures = new Set<THREE.Texture>()
 
   root.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return
-    object.geometry.dispose()
+    if (!disposedGeometries.has(object.geometry)) {
+      object.geometry.dispose()
+      disposedGeometries.add(object.geometry)
+    }
 
     const materials = Array.isArray(object.material) ? object.material : [object.material]
     materials.forEach((meshMaterial) => {
@@ -217,7 +233,7 @@ const fragmentShader = /* glsl */ `
 `
 
 type OceanCanvasProps = {
-  onTurbineSelect?: () => void
+  onTurbineSelect?: (turbine: WindFarmAsset) => void
 }
 
 export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
@@ -293,9 +309,33 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
     sunLight.position.set(-12, 18, 9)
     scene.add(hemisphereLight, sunLight)
 
-    let turbineRoot: THREE.Group | null = null
-    let turbineRotor: THREE.Object3D | null = null
+    const turbineRoot = new THREE.Group()
+    turbineRoot.name = "wind-turbines"
+    offshoreAssets.add(turbineRoot)
+
+    const turbineRotors: THREE.Object3D[] = []
     let isDisposed = false
+
+    if (substationCoordinates) {
+      const substationGeometry = new THREE.BoxGeometry(5.4, SUBSTATION_HEIGHT, 4)
+      const substationMaterial = new THREE.MeshStandardMaterial({
+        color: "#d7dee0",
+        roughness: 0.72,
+        metalness: 0.18,
+      })
+      const substation = new THREE.Mesh(substationGeometry, substationMaterial)
+      substation.name = substationCoordinates.name
+      substation.position.copy(
+        toWorldPosition(
+          substationCoordinates,
+          TURBINE_REFERENCE_POSITION.y + SUBSTATION_HEIGHT / 2,
+        ),
+      )
+      substation.castShadow = true
+      substation.receiveShadow = true
+      substation.userData.coordinate = substationCoordinates
+      offshoreAssets.add(substation)
+    }
 
     const turbineLoader = new GLTFLoader()
     turbineLoader.load(
@@ -306,7 +346,7 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
           return
         }
 
-        turbine.name = "wind-turbine"
+        turbine.name = "wind-turbine-template"
         turbine.updateMatrixWorld(true)
 
         const sourceBounds = new THREE.Box3().setFromObject(turbine)
@@ -317,22 +357,25 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
 
         const scaledBounds = new THREE.Box3().setFromObject(turbine)
         const scaledCenter = scaledBounds.getCenter(new THREE.Vector3())
-        turbine.position.set(
-          TURBINE_POSITION.x - scaledCenter.x,
-          TURBINE_POSITION.y - scaledBounds.min.y,
-          TURBINE_POSITION.z - scaledCenter.z,
-        )
+        turbine.position.set(-scaledCenter.x, -scaledBounds.min.y, -scaledCenter.z)
 
         turbine.traverse((object) => {
-          if (object.name.toLowerCase().includes("blades")) turbineRotor = object
           if (object instanceof THREE.Mesh) {
             object.castShadow = true
             object.frustumCulled = true
           }
         })
 
-        turbineRoot = turbine
-        offshoreAssets.add(turbine)
+        turbineCoordinates.forEach((coordinate) => {
+          const turbineInstance = turbine.clone(true)
+          turbineInstance.name = coordinate.name
+          turbineInstance.position.add(toWorldPosition(coordinate, TURBINE_BASE_Y))
+          turbineInstance.userData.coordinate = coordinate
+          turbineInstance.traverse((object) => {
+            if (object.name.toLowerCase().includes("blades")) turbineRotors.push(object)
+          })
+          turbineRoot.add(turbineInstance)
+        })
       },
       undefined,
       (error) => console.error("Unable to load the wind turbine model.", error),
@@ -352,33 +395,30 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
     let targetFieldOfView = camera.fov
     const pressedKeys = new Set<string>()
 
-    const MAX_YAW = THREE.MathUtils.degToRad(14)
-    const MAX_PITCH = THREE.MathUtils.degToRad(8)
-    const MIN_FIELD_OF_VIEW = 41
-    const MAX_FIELD_OF_VIEW = 51
+    // Keep only the projection's mathematical safety range. Camera movement,
+    // yaw and pitch intentionally have no experience-level limits.
+    const MIN_VALID_FIELD_OF_VIEW = 1
+    const MAX_VALID_FIELD_OF_VIEW = 179
     const raycaster = new THREE.Raycaster()
     const pointerPosition = new THREE.Vector2()
 
-    const isTurbineHit = (event: PointerEvent) => {
-      if (!turbineRoot) return false
+    const getTurbineHit = (event: PointerEvent) => {
+      if (turbineRoot.children.length === 0) return null
       const bounds = renderer.domElement.getBoundingClientRect()
-      if (bounds.width === 0 || bounds.height === 0) return false
+      if (bounds.width === 0 || bounds.height === 0) return null
       pointerPosition.set(
         ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
         -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
       )
       raycaster.setFromCamera(pointerPosition, camera)
-      return raycaster.intersectObject(turbineRoot, true).length > 0
-    }
-
-    const clampCameraOffset = () => {
-      targetCameraOffset.x = THREE.MathUtils.clamp(targetCameraOffset.x, -7, 7)
-      targetCameraOffset.y = THREE.MathUtils.clamp(targetCameraOffset.y, -5, 5)
-    }
-
-    const clampCameraRotation = () => {
-      targetCameraRotation.x = THREE.MathUtils.clamp(targetCameraRotation.x, -MAX_YAW, MAX_YAW)
-      targetCameraRotation.y = THREE.MathUtils.clamp(targetCameraRotation.y, -MAX_PITCH, MAX_PITCH)
+      const hitObject = raycaster.intersectObject(turbineRoot, true)[0]?.object
+      let currentObject: THREE.Object3D | null = hitObject ?? null
+      while (currentObject && currentObject !== turbineRoot) {
+        const coordinate = currentObject.userData.coordinate as WindFarmAsset | undefined
+        if (coordinate) return coordinate
+        currentObject = currentObject.parent
+      }
+      return null
     }
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -406,36 +446,34 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
       if (dragMode === "rotate") {
         targetCameraRotation.x += deltaX * 0.0035
         targetCameraRotation.y -= deltaY * 0.003
-        clampCameraRotation()
       } else {
         targetCameraOffset.x -= deltaX * 0.02
         targetCameraOffset.y -= deltaY * 0.02
-        clampCameraOffset()
       }
     }
 
     const handlePointerUp = (event: PointerEvent) => {
       if (event.pointerId !== activePointer) return
-      const shouldSelectTurbine = !pointerDragged && isTurbineHit(event)
+      const selectedTurbine = pointerDragged ? null : getTurbineHit(event)
       activePointer = null
       if (renderer.domElement.hasPointerCapture(event.pointerId)) {
         renderer.domElement.releasePointerCapture(event.pointerId)
       }
-      renderer.domElement.style.cursor = shouldSelectTurbine ? "pointer" : "grab"
-      if (shouldSelectTurbine) onTurbineSelectRef.current?.()
+      renderer.domElement.style.cursor = selectedTurbine ? "pointer" : "grab"
+      if (selectedTurbine) onTurbineSelectRef.current?.(selectedTurbine)
     }
 
     const handlePointerHover = (event: PointerEvent) => {
       if (activePointer !== null || event.pointerType === "touch") return
-      renderer.domElement.style.cursor = isTurbineHit(event) ? "pointer" : "grab"
+      renderer.domElement.style.cursor = getTurbineHit(event) ? "pointer" : "grab"
     }
 
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault()
       targetFieldOfView = THREE.MathUtils.clamp(
         targetFieldOfView + event.deltaY * 0.008,
-        MIN_FIELD_OF_VIEW,
-        MAX_FIELD_OF_VIEW,
+        MIN_VALID_FIELD_OF_VIEW,
+        MAX_VALID_FIELD_OF_VIEW,
       )
     }
 
@@ -468,7 +506,11 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
       lastFrameTime = timestamp
       if (!reducedMotion.matches) elapsedTime += deltaSeconds
       uniforms.uTime.value = reducedMotion.matches ? 1.5 : elapsedTime
-      if (turbineRotor && !reducedMotion.matches) turbineRotor.rotation.z -= ROTOR_SPEED * deltaSeconds
+      if (!reducedMotion.matches) {
+        turbineRotors.forEach((rotor) => {
+          rotor.rotation.z -= ROTOR_SPEED * deltaSeconds
+        })
+      }
 
       const moveSpeed = 3.5 * deltaSeconds
       const rotateSpeed = THREE.MathUtils.degToRad(24) * deltaSeconds
@@ -486,9 +528,11 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
       }
       if (pressedKeys.has("+") || pressedKeys.has("=")) targetFieldOfView -= zoomSpeed
       if (pressedKeys.has("-") || pressedKeys.has("_")) targetFieldOfView += zoomSpeed
-      clampCameraOffset()
-      clampCameraRotation()
-      targetFieldOfView = THREE.MathUtils.clamp(targetFieldOfView, MIN_FIELD_OF_VIEW, MAX_FIELD_OF_VIEW)
+      targetFieldOfView = THREE.MathUtils.clamp(
+        targetFieldOfView,
+        MIN_VALID_FIELD_OF_VIEW,
+        MAX_VALID_FIELD_OF_VIEW,
+      )
 
       cameraOffset.lerp(targetCameraOffset, 0.085)
       cameraRotation.lerp(targetCameraRotation, 0.085)
@@ -540,10 +584,8 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
       renderer.domElement.removeEventListener("pointerup", handlePointerUp)
       renderer.domElement.removeEventListener("pointercancel", handlePointerUp)
       renderer.domElement.removeEventListener("wheel", handleWheel)
-      if (turbineRoot) {
-        offshoreAssets.remove(turbineRoot)
-        disposeObject(turbineRoot)
-      }
+      scene.remove(offshoreAssets)
+      disposeObject(offshoreAssets)
       geometry.dispose()
       material.dispose()
       renderer.dispose()
@@ -557,11 +599,12 @@ export function OceanCanvas({ onTurbineSelect }: OceanCanvasProps) {
       className="absolute inset-0 focus-visible:outline-2 focus-visible:outline-offset-[-3px] focus-visible:outline-cyan-500"
       role="button"
       tabIndex={0}
-      aria-label="海上风机三维监控场景。点击风机或按回车键查看详情；拖拽或使用方向键移动视角。"
+      aria-label="海上风机三维监控场景。点击风机或按回车键查看详情；拖拽或使用方向键自由移动视角，按住鼠标中键或 Shift 拖拽可自由旋转，滚轮或加减键可自由缩放。"
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return
         event.preventDefault()
-        onTurbineSelectRef.current?.()
+        const firstTurbine = turbineCoordinates[0]
+        if (firstTurbine) onTurbineSelectRef.current?.(firstTurbine)
       }}
     />
   )
