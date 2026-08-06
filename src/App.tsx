@@ -2,7 +2,11 @@ import { useEffect, useState, type CSSProperties } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
 import { FeaturePage } from "@/src/pages/feature-page";
 import { getFeaturePage } from "@/src/pages/page-definitions";
 import { OceanBackground, OceanHome } from "@/src/pages/ocean-home";
@@ -30,6 +34,7 @@ function App() {
     <div className="relative min-h-svh">
       {isOceanPage && <OceanBackground />}
       <SidebarProvider
+        defaultOpen={false}
         className={isOceanPage ? "pointer-events-none relative z-10 bg-transparent!" : undefined}
         style={
           {
@@ -45,19 +50,17 @@ function App() {
         <SidebarInset
           className={
             isOceanPage
-              ? "pointer-events-none h-svh min-h-0 overflow-hidden bg-transparent! md:h-[calc(100svh-1rem)]"
+              ? "pointer-events-none h-svh min-h-0 overflow-hidden bg-transparent! md:m-0! md:rounded-none! md:shadow-none!"
               : "min-h-0 overflow-hidden"
           }
         >
-          <div
-            className={
-              isOceanPage
-                ? "pointer-events-auto bg-background/70 backdrop-blur-xl"
-                : undefined
-            }
-          >
+          {isOceanPage ? (
+            <div className="pointer-events-auto absolute top-3 left-3 z-20">
+              <SidebarTrigger className="bg-background/70 shadow-sm backdrop-blur-xl hover:bg-background/85" />
+            </div>
+          ) : (
             <SiteHeader title={currentPage?.title} />
-          </div>
+          )}
           {isOceanPage ? <OceanHome /> : <FeaturePage page={currentPage} />}
         </SidebarInset>
       </SidebarProvider>

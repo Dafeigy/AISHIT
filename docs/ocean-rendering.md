@@ -1,224 +1,98 @@
 # 海浪渲染实现说明
 
-## 1. 概述
+## 1. 目标与参考
 
-当前默认路由 `#` 与智能监盘路由 `#smart-monitoring` 使用 Three.js 渲染动态海面。海面在视觉层级上是固定的全窗口背景，不参与 Sidebar 的宽度计算，因此 Sidebar 展开或收起不会改变 Canvas 尺寸、相机画面或海浪位置。
+首页 `#` 与智能监盘路由 `#smart-monitoring` 使用 Three.js 渲染全窗口动态海面。视觉模型参考知乎文章《ThreeJS着色器打造震撼海洋动画背景》及其引用的 Alexander Alekseev “Seascape” shader：
 
-当前 Three.js 版本：`three@0.185.1`。
+- 多层 `seaOctave` 生成有方向性的尖锐波峰；
+- Fresnel 混合天空反射与深水折射色；
+- 基于波面法线计算漫反射、太阳镜面高光和远景雾化；
+- 时间通过 uniform 传入，全部波形计算在 GPU 完成。
 
-## 2. 组件命名与文件位置
+参考文章原方案是全屏片元光线步进。当前项目没有直接照搬全屏平面，而是把同一波形和着色思路适配到真实三维海面，以便后续风机模型能与海面共享世界坐标、相机和深度关系。
 
-| 名称 | 文件 | 职责 |
-| --- | --- | --- |
-| `OceanCanvas` | `src/pages/ocean-canvas.tsx` | 创建 Three.js 场景、海面网格、灯光、相机、动画循环和视角交互 |
-| `OceanBackground` | `src/pages/ocean-home.tsx` | 将 `OceanCanvas` 固定在视口背景层，并叠加环境渐变 |
-| `OceanHome` | `src/pages/ocean-home.tsx` | 智能监盘的前景内容容器，目前主要承载 `MessageComposer` |
-| `App` | `src/App.tsx` | 根据路由决定是否挂载海洋背景，并组织 Sidebar、顶部栏和前景内容 |
+## 2. 文件与职责
 
-## 3. 页面分层
+| 文件 | 职责 |
+| --- | --- |
+| `src/pages/ocean-canvas.tsx` | Three.js 场景、GLSL shader、海面网格、相机交互和资源释放 |
+| `src/pages/ocean-home.tsx` | 固定背景层、环境色叠加和首页前景内容 |
+| `src/App.tsx` | 路由判断、Sidebar、顶部栏及前景内容组织 |
 
-智能监盘页面分为三个视觉层级：
+## 3. 场景结构
 
-1. `OceanBackground`：`position: fixed`，覆盖整个视口，层级为 `z-0`。
-2. Sidebar 与顶部栏：位于 `z-10` 的应用导航层。
-3. `MessageComposer`：位于 Canvas 内容区上方，使用 `z-[100]` 和 `z-[101]`。
+`OceanCanvas` 创建以下对象：
 
-`OceanBackground` 是否存在仍由智能监盘路由控制，因此它在信息架构上属于智能监盘页面，但在布局上不受 Sidebar 尺寸变化影响。
+1. `THREE.Scene` 与雾色背景；
+2. 透视相机；
+3. `WebGLRenderer`；
+4. 名为 `procedural-ocean` 的海面 Mesh；
+5. 名为 `offshore-assets` 的空 Group，供后续风机、升压站等 GLTF 资产使用。
 
-前景空白区域通过 `pointer-events-none` 允许事件穿透到 Canvas；Sidebar、顶部栏和输入组件通过 `pointer-events-auto` 保持可操作。
+海面采用 `PlaneGeometry(360, 276, 180, 138)`，长宽均为初始实现的 2 倍；旋转为水平面后放置在世界坐标 `(0, -1.15, -30)`。网格仍保持约 25,000 个顶点，避免扩大范围时同步增加 4 倍顶点开销；顶点位移由 vertex shader 并行计算。
 
-## 4. Three.js 场景初始化
+## 4. 波形模型
 
-`OceanCanvas` 在 `useEffect` 中初始化以下对象：
+核心常量：
 
-- `THREE.Scene`
-- `THREE.PerspectiveCamera`
-- `THREE.WebGLRenderer`
-- `THREE.PlaneGeometry`
-- `THREE.MeshStandardMaterial`
-- `THREE.Mesh`
-- 环境光、半球光和固定点光源
-
-组件卸载时会取消动画帧、移除事件监听器，并释放 Geometry、Material 和 Renderer，避免 GPU 与事件资源泄漏。
-
-## 5. 海面几何体
-
-海面使用横向平面网格：
-
-```ts
-new THREE.PlaneGeometry(78, 58, 128, 84)
-```
-
-主要参数：
-
-| 参数 | 当前值 | 说明 |
+| 参数 | 值 | 作用 |
 | --- | ---: | --- |
-| 宽度 | `78` | 世界坐标中的海面宽度 |
-| 深度 | `58` | 世界坐标中的海面前后长度 |
-| 横向分段 | `128` | X 方向网格分段 |
-| 纵向分段 | `84` | Z 方向网格分段 |
-| 顶点数量 | 约 `10,965` | `(128 + 1) × (84 + 1)` |
-| 海面 Y 坐标 | `-1.25` | 海面整体垂直位置 |
+| `SEA_HEIGHT` | `0.62` | 基础波幅 |
+| `SEA_CHOPPY` | `3.8` | 波峰尖锐程度 |
+| `SEA_FREQ` | `0.17` | 基础空间频率 |
+| `SEA_SPEED` | `0.62` | 时间推进速度 |
+| 几何 octave | `4` | 顶点位移层数 |
+| 片元 octave | `5` | 表面法线细节层数 |
 
-平面创建后通过 `rotateX(-Math.PI / 2)` 转为水平海面。
+每一层将 UV 乘以旋转缩放矩阵 `mat2(1.6, 1.2, -1.2, 1.6)`，同时提高频率、降低振幅，并使 choppy 值逐渐趋近 1。正向和反向时间采样叠加后形成相互交错的海浪，而不是单一方向滚动的噪声。
 
-网格尺寸大于相机可移动范围，避免视角平移时看到平面边界。
+## 5. 水面着色
 
-## 6. 柏林噪声实现
+fragment shader 对当前点及 X/Z 偏移点重新采样详细波高，通过有限差分重建表面法线。最终颜色由以下部分合成：
 
-海浪高度由文件内的二维柏林噪声函数生成。相关函数包括：
+- 深水基础色 `#061e2b`；
+- 浅水/透光色 `#74b9ae`；
+- Fresnel 天空反射；
+- 固定太阳方向产生的窄镜面高光；
+- 随相机距离增加的地平线雾化。
 
-- `fade`：使用五次平滑曲线降低网格边界突变。
-- `lerp`：在四个梯度结果之间插值。
-- `gradient`：根据哈希值选择二维梯度方向。
-- `perlinNoise`：计算指定二维坐标的噪声值。
+Renderer 使用 sRGB 输出、ACES Filmic tone mapping 和 `1.02` 曝光值。
 
-`PERMUTATION` 是固定的 256 项置换表，复制后形成 `GRADIENTS`，用于生成可重复的噪声结果。
+## 6. 相机与交互
 
-动画更新时，每个顶点的 Y 值按以下形式计算：
+相机初始位置为 `(0, 6.8, 14.5)`，观察目标为 `(0, -0.72, -10)`。支持：
 
-```ts
-const wave = perlinNoise(
-  x * 0.2 + elapsed * 0.02,
-  z * 0.2 - elapsed * 0.78,
-)
+- 鼠标或触控拖拽平移；
+- `W/A/S/D` 或方向键平移；
+- 按住鼠标中键拖拽或 `Shift` + 左键拖拽，在水平 ±14°、俯仰 ±8° 范围内旋转视角；
+- `Shift` + 方向键提供等价的键盘旋转；
+- 鼠标滚轮或 `+` / `-` 键在 41°–51° 视场角范围内小幅缩放。
 
-height = baseHeight + wave * 1.25
-```
+相机平移、旋转和缩放均使用目标值与当前值插值，避免输入造成镜头跳变。输入框、文本域、选择器或可编辑区域获得焦点时不会触发键盘控制。
 
-其中：
+## 7. 性能与无障碍
 
-- `0.2` 控制空间噪声尺度。
-- `elapsed` 的两个系数控制 X、Z 方向的时间推进速度。
-- `1.25` 控制海浪高度振幅。
+- 波高和法线均在 GPU 计算，主线程不再循环更新顶点或调用 `computeVertexNormals()`；
+- 像素比最高限制为 `1.5`；
+- 不启用实时阴影；
+- `prefers-reduced-motion: reduce` 时冻结海浪时间；
+- Canvas 使用图像语义，并提供中文可访问名称；
+- 卸载时释放 Geometry、Material、Renderer 和全部事件监听器。
 
-顶点更新后调用 `computeVertexNormals()`，让光照能够跟随波峰和波谷变化。
+## 8. 风机数字孪生扩展约定
 
-## 7. 材质与颜色
+当前风机的摆放参考值：
 
-海面使用 `THREE.MeshStandardMaterial`：
+| 参数 | 数值 | 说明 |
+| --- | ---: | --- |
+| 世界 X | `8` | 水平方向位置 |
+| 世界 Z | `-27` | 纵深位置，即代码中的 `TURBINE_WORLD_Z_OFFSET` |
+| 初始基准 Y | `-1.05` | 模型底部贴近海面的原始基准 |
+| 垂直下沉 Y 偏移 | `-0.65` | 当前隐藏底座所用下沉量，即 `TURBINE_VERTICAL_SINK_OFFSET_Y` |
+| 最终世界 Y | `-1.70` | 初始基准与下沉偏移相加后的结果 |
 
-| 属性 | 当前值 | 作用 |
-| --- | --- | --- |
-| `color` | `#0b344d` | 深墨蓝海水基础色 |
-| `emissive` | `#020a10` | 极弱的深色自发光，避免完全黑死 |
-| `emissiveIntensity` | `0.02` | 自发光强度 |
-| `roughness` | `0.24` | 控制高光扩散范围 |
-| `metalness` | `0.04` | 保持低金属度的水面观感 |
-| `flatShading` | `false` | 使用平滑顶点法线 |
+本场景与当前 GLB 均为 **Y-up**：视觉上的“向下沉”实际修改世界 Y，而不是世界 Z。为兼容后续摆放口径，代码同时单独保留世界 Z 位置 `-27` 和垂直下沉 Y 偏移 `-0.65`，不要将两者混用。
 
-Renderer 使用：
+后续加载风机时应将模型加入 `offshore-assets` Group，并沿用当前世界坐标：海平面基准约为 `y = -1.15`。建议下一阶段将 Three.js 场景封装为独立的场景控制器或 React context，使模型加载、选中、高亮、遥测标签和相机定位都通过统一接口管理。
 
-- `THREE.SRGBColorSpace`
-- `THREE.ACESFilmicToneMapping`
-- `toneMappingExposure = 1.05`
-
-背景与雾颜色均为 `#dceff1`，形成明亮天空与深色海面的对比。
-
-## 8. 固定物理点光源
-
-基础照明由半球光与环境光提供：
-
-```ts
-new THREE.HemisphereLight("#f5fbfa", "#0b3a43", 2)
-new THREE.AmbientLight("#d7f2f2", 0.35)
-```
-
-主要高光由固定世界坐标的点光源产生：
-
-```ts
-const keyLight = new THREE.PointLight("#fff2cf", 420, 46, 2)
-keyLight.position.set(0, 9, -3.5)
-```
-
-该坐标位于初始相机目标点 `(0, -1.15, -3.5)` 的正上方，因此初始光斑接近屏幕中心。
-
-点光源不会跟随相机移动。当用户平移视角时，光斑会停留在相同的海面物理位置，从而表现出真实的空间关系。
-
-未启用实时阴影，以控制 GPU 开销。
-
-## 9. 相机设置与有限视角移动
-
-相机使用固定缩放比例和固定俯视角：
-
-```ts
-new THREE.PerspectiveCamera(48, 1, 0.1, 100)
-```
-
-初始位置与观察目标：
-
-```ts
-baseCameraPosition = (0, 7.1, 13.5)
-baseCameraTarget = (0, -1.15, -3.5)
-```
-
-支持以下视角操作：
-
-- 鼠标或触控拖拽。
-- `W`、`A`、`S`、`D`。
-- 键盘方向键。
-
-相机位置和目标点会同步平移，因此缩放比例、俯视角和透视关系保持不变。
-
-移动范围：
-
-| 方向 | 范围 |
-| --- | ---: |
-| 左右 | `-5.5` 到 `5.5` |
-| 前后 | `-3.2` 到 `3.2` |
-
-`cameraOffset.lerp(targetCameraOffset, 0.09)` 用于平滑相机移动。
-
-输入框或文本输入获得焦点时，键盘事件不会控制相机。
-
-## 10. 性能策略
-
-当前实现采取以下性能限制：
-
-- `renderer.setPixelRatio(1)`，避免高 DPI 屏幕成倍增加像素渲染量。
-- 海浪网格约 10,965 个顶点。
-- 海浪顶点与法线约每 33ms 更新一次，即约 30 FPS。
-- 不启用实时阴影。
-- 只使用一次柏林噪声采样计算单个顶点高度。
-- Canvas 尺寸只随窗口尺寸变化，不随 Sidebar 展开或收起变化。
-
-需要继续优化时，可考虑将噪声和法线计算迁移到 Vertex Shader，从 CPU 顶点循环切换为 GPU 计算。
-
-## 11. 生命周期与资源释放
-
-组件卸载时执行：
-
-- `cancelAnimationFrame`
-- 移除 `resize`、`keydown`、`keyup` 监听器
-- 移除 Pointer 事件监听器
-- `geometry.dispose()`
-- `material.dispose()`
-- `renderer.dispose()`
-- 移除 Renderer Canvas 元素
-
-增加新纹理、RenderTarget 或后处理对象时，也需要在清理函数中调用对应的 `dispose()`。
-
-## 12. 路由集成
-
-`App` 通过以下逻辑识别海洋页面：
-
-```ts
-const isOceanPage = !currentPage || currentPage.slug === "smart-monitoring"
-```
-
-当 `isOceanPage` 为 `true` 时：
-
-- 挂载 `OceanBackground`。
-- Sidebar 与顶部栏以透明前景层显示。
-- 内容区渲染 `OceanHome`。
-
-因此 `#` 和 `#smart-monitoring` 都会显示同一海洋场景。
-
-## 13. 后续扩展建议
-
-- 将柏林噪声迁移至 GLSL Vertex Shader。
-- 增加多层噪声以分别模拟大浪与细小波纹。
-- 使用环境贴图或程序化天空提升水面反射。
-- 增加质量档位，按设备性能选择网格分段和更新频率。
-- 通过配置对象集中管理颜色、流速、振幅、光源位置和相机限制。
-
+若风机需要与瞬时波面精确接触，应在 TypeScript/CPU 侧提供与 shader 参数一致的低频波高采样函数，仅用于基础或浮式平台的垂直位置计算；不要恢复逐顶点 CPU 海浪更新。

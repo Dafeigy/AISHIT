@@ -1,5 +1,8 @@
+import { useState } from "react"
+
 import { MessageComposer } from "@/src/pages/message-composer"
 import { OceanCanvas } from "@/src/pages/ocean-canvas"
+import { TurbineInfoDialog } from "@/src/pages/turbine-info-dialog"
 
 export function OceanHome() {
   return (
@@ -10,10 +13,15 @@ export function OceanHome() {
 }
 
 export function OceanBackground() {
+  const [turbineDialogOpen, setTurbineDialogOpen] = useState(false)
+
   return (
-    <div className="fixed inset-0 z-0 overflow-hidden bg-[#dceff1]">
-      <OceanCanvas />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_4%,rgba(255,255,244,0.42),transparent_38%),linear-gradient(180deg,rgba(255,255,255,0.08),rgba(34,113,130,0.12))]" />
-    </div>
+    <>
+      <div className="fixed inset-0 z-0 overflow-hidden bg-[#b8d9de]">
+        <OceanCanvas onTurbineSelect={() => setTurbineDialogOpen(true)} />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_24%_3%,rgba(255,248,219,0.24),transparent_32%),linear-gradient(180deg,rgba(226,246,246,0.12),transparent_42%,rgba(2,21,31,0.08))]" />
+      </div>
+      <TurbineInfoDialog open={turbineDialogOpen} onOpenChange={setTurbineDialogOpen} />
+    </>
   )
 }
