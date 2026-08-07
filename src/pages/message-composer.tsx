@@ -12,11 +12,16 @@ import {
 import { toast } from "sonner"
 
 import { useRecorder } from "@/hooks/use-recorder"
+import type { VoiceCommandExecution } from "@/src/interactions/voice-command"
 
 const iconButtonClass =
   "flex size-11 items-center justify-center rounded-full text-muted-foreground transition-colors duration-200 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 
-export function MessageComposer() {
+type MessageComposerProps = {
+  onVoiceTranscript?: (text: string) => VoiceCommandExecution | null
+}
+
+export function MessageComposer({ onVoiceTranscript }: MessageComposerProps) {
   const [expanded, setExpanded] = useState(false)
   const [value, setValue] = useState("")
   const { status, recognizing, transcript, errorMessage, start, stop, toggle } = useRecorder({
@@ -168,6 +173,27 @@ export function MessageComposer() {
     if (transcript === null) return
     const recordingSource = recordingSourceRef.current
     recordingSourceRef.current = null
+    const commandExecution = onVoiceTranscript?.(transcript)
+    if (commandExecution) {
+      const toastMessage =
+        commandExecution.status === "executed"
+          ? "语音命令已执行"
+          : commandExecution.status === "rejected"
+            ? "语音命令无法执行"
+            : "语音命令已识别"
+      const showToast =
+        commandExecution.status === "executed"
+          ? toast.success
+          : commandExecution.status === "rejected"
+            ? toast.error
+            : toast.info
+      showToast(toastMessage, {
+        id: "composer-asr",
+        description: commandExecution.message,
+      })
+      return
+    }
+
     if (recordingSource === "shortcut") {
       send(transcript, false, "composer-asr")
       return
@@ -188,7 +214,7 @@ export function MessageComposer() {
       textarea?.setSelectionRange(nextCaretPosition, nextCaretPosition)
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [send, transcript])
+  }, [onVoiceTranscript, send, transcript])
 
   return (
     <>

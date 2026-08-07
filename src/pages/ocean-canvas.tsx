@@ -3,8 +3,8 @@ import * as THREE from "three"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
 
 import windTurbineUrl from "@/assets/models/wind_turbine.glb?url"
-import windFarmCoordinatesRaw from "@/assets/coordinates/turbines_xy.json — 风机 XY + 经纬度.json — 风机 XY + 经纬度.json — 风机 XY + 经纬度?raw"
 import type { WindFarmAsset } from "@/src/data/turbine-mock-data"
+import { substationCoordinates, turbineCoordinates } from "@/src/data/wind-farm-assets"
 
 const TURBINE_HEIGHT = 7.5
 const OCEAN_WIDTH = 360
@@ -18,10 +18,6 @@ const FARM_COORDINATE_SCALE = 0.01
 const TURBINE_BASE_Y = TURBINE_REFERENCE_POSITION.y + TURBINE_VERTICAL_SINK_OFFSET_Y
 const SUBSTATION_HEIGHT = 2.4
 const ROTOR_SPEED = 0.58
-
-const windFarmAssets = JSON.parse(windFarmCoordinatesRaw) as WindFarmAsset[]
-const turbineCoordinates = windFarmAssets.filter(({ name }) => name.includes("风机"))
-const substationCoordinates = windFarmAssets.find(({ name }) => name.includes("升压站"))
 
 function toWorldPosition({ x, y }: Pick<WindFarmAsset, "x" | "y">, worldY: number) {
   return new THREE.Vector3(

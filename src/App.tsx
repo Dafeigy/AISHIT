@@ -11,6 +11,7 @@ import {
 import { FeaturePage } from "@/src/pages/feature-page";
 import { getFeaturePage } from "@/src/pages/page-definitions";
 import { OceanBackground, OceanHome } from "@/src/pages/ocean-home";
+import { OceanInteractionProvider } from "@/src/pages/ocean-interaction-context";
 
 import "./App.css";
 
@@ -32,41 +33,43 @@ function App() {
   }, []);
 
   return (
-    <div className="relative min-h-svh">
-      {isOceanPage && <OceanBackground />}
-      <SidebarProvider
-        defaultOpen={false}
-        className={isOceanPage ? "pointer-events-none relative z-10 bg-transparent!" : undefined}
-        style={
-          {
-            "--sidebar-width": "calc(var(--spacing) * 72)",
-            "--header-height": "calc(var(--spacing) * 12)",
-          } as CSSProperties
-        }
-      >
-        <AppSidebar
-          variant="inset"
-          className={isOceanPage ? "pointer-events-auto" : undefined}
-        />
-        <SidebarInset
-          className={
-            isOceanPage
-              ? "pointer-events-none h-svh min-h-0 overflow-hidden bg-transparent! md:m-0! md:rounded-none! md:shadow-none!"
-              : "min-h-0 overflow-hidden"
+    <OceanInteractionProvider>
+      <div className="relative min-h-svh">
+        {isOceanPage && <OceanBackground />}
+        <SidebarProvider
+          defaultOpen={false}
+          className={isOceanPage ? "pointer-events-none relative z-10 bg-transparent!" : undefined}
+          style={
+            {
+              "--sidebar-width": "calc(var(--spacing) * 72)",
+              "--header-height": "calc(var(--spacing) * 12)",
+            } as CSSProperties
           }
         >
-          {isOceanPage ? (
-            <div className="pointer-events-auto absolute top-3 left-3 z-20">
-              <SidebarTrigger className="bg-background/70 shadow-sm backdrop-blur-xl hover:bg-background/85" />
-            </div>
-          ) : (
-            <SiteHeader title={currentPage?.title} />
-          )}
-          {isOceanPage ? <OceanHome /> : <FeaturePage page={currentPage} />}
-        </SidebarInset>
-      </SidebarProvider>
-      <Toaster richColors />
-    </div>
+          <AppSidebar
+            variant="inset"
+            className={isOceanPage ? "pointer-events-auto" : undefined}
+          />
+          <SidebarInset
+            className={
+              isOceanPage
+                ? "pointer-events-none h-svh min-h-0 overflow-hidden bg-transparent! md:m-0! md:rounded-none! md:shadow-none!"
+                : "min-h-0 overflow-hidden"
+            }
+          >
+            {isOceanPage ? (
+              <div className="pointer-events-auto absolute top-3 left-3 z-20">
+                <SidebarTrigger className="bg-background/70 shadow-sm backdrop-blur-xl hover:bg-background/85" />
+              </div>
+            ) : (
+              <SiteHeader title={currentPage?.title} />
+            )}
+            {isOceanPage ? <OceanHome /> : <FeaturePage page={currentPage} />}
+          </SidebarInset>
+        </SidebarProvider>
+        <Toaster richColors />
+      </div>
+    </OceanInteractionProvider>
   );
 }
 
