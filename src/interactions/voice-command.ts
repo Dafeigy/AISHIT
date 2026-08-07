@@ -16,6 +16,9 @@ export type VoiceCommandExecution = {
   message: string
 }
 
+export const MIN_VOICE_TURBINE_NUMBER = 1
+export const MAX_VOICE_TURBINE_NUMBER = 55
+
 const CHINESE_DIGITS: Record<string, number> = {
   零: 0,
   〇: 0,
@@ -83,7 +86,7 @@ export function parseVoiceInteractionCommand(text: string): VoiceInteractionComm
   if (!turbineMatch) return null
 
   const turbineNo = parseChineseInteger(turbineMatch[1])
-  if (turbineNo === null || !Number.isSafeInteger(turbineNo) || turbineNo <= 0) return null
+  if (turbineNo === null || !Number.isSafeInteger(turbineNo)) return null
 
   return {
     name: "check_windturbine",

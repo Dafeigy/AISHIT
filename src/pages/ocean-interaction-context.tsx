@@ -11,6 +11,8 @@ import {
 import type { WindFarmAsset } from "@/src/data/turbine-mock-data"
 import { getTurbineByNumber, turbineNumberRange } from "@/src/data/wind-farm-assets"
 import {
+  MAX_VOICE_TURBINE_NUMBER,
+  MIN_VOICE_TURBINE_NUMBER,
   parseVoiceInteractionCommand,
   type VoiceCommandExecution,
 } from "@/src/interactions/voice-command"
@@ -46,12 +48,23 @@ export function OceanInteractionProvider({ children }: { children: ReactNode }) 
       if (!command) return null
 
       if (command.name === "check_windturbine") {
+        if (
+          command.arguments.turbineNo < MIN_VOICE_TURBINE_NUMBER ||
+          command.arguments.turbineNo > MAX_VOICE_TURBINE_NUMBER
+        ) {
+          return {
+            command,
+            status: "rejected",
+            message: `风机编号需要在 ${MIN_VOICE_TURBINE_NUMBER}–${MAX_VOICE_TURBINE_NUMBER} 之间。`,
+          }
+        }
+
         const turbine = getTurbineByNumber(command.arguments.turbineNo)
         if (!turbine) {
           return {
             command,
             status: "rejected",
-            message: `未找到 ${command.arguments.turbineNo} 号风机，请输入 ${turbineNumberRange.min}–${turbineNumberRange.max} 之间的编号。`,
+            message: `${command.arguments.turbineNo} 号风机命令有效，但当前场景仅配置了 ${turbineNumberRange.min}–${turbineNumberRange.max} 号风机资产。`,
           }
         }
 
