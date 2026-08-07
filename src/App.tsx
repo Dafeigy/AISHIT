@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
+import { Toaster } from "@/components/ui/sonner";
 import {
   SidebarInset,
   SidebarProvider,
@@ -64,6 +65,7 @@ function App() {
           {isOceanPage ? <OceanHome /> : <FeaturePage page={currentPage} />}
         </SidebarInset>
       </SidebarProvider>
+      <Toaster richColors />
     </div>
   );
 }

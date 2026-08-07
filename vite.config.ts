@@ -23,6 +23,13 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    proxy: {
+      "/asr": {
+        target: "https://nls-gateway-cn-shanghai.aliyuncs.com",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/asr/, "/stream/v1/asr"),
+      },
+    },
     hmr: host
       ? {
           protocol: "ws",
