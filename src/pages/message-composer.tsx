@@ -21,7 +21,7 @@ export function MessageComposer() {
   const [value, setValue] = useState("")
   const { status, recognizing, transcript, errorMessage, start, stop, toggle } = useRecorder({
     toastId: "composer-asr",
-    successMessage: "识别完成，文字已填入输入框。",
+    successMessage: null,
   })
   const isRecording = status === "recording"
   const isRequesting = status === "requesting"
@@ -30,20 +30,34 @@ export function MessageComposer() {
   const voiceKeyHeldRef = useRef(false)
   const voiceShortcutActiveRef = useRef(false)
   const voiceHoldTimerRef = useRef<number | null>(null)
+  const recordingSourceRef = useRef<"shortcut" | "composer" | null>(null)
+  const isRecordingRef = useRef(isRecording)
 
   const handleTriggerClick = () => {
     setExpanded(true)
   }
 
-  const send = useCallback((message: string) => {
+  const send = useCallback((message: string, clearDraft = true, toastId?: string) => {
     const text = message.trim()
     if (!text) return
     toast.success("消息已发送", {
       description: text,
+      id: toastId,
     })
-    valueRef.current = ""
-    setValue("")
+    if (clearDraft) {
+      valueRef.current = ""
+      setValue("")
+    }
   }, [])
+
+  const handleMicToggle = () => {
+    if (!isRecording) recordingSourceRef.current = "composer"
+    toggle()
+  }
+
+  useEffect(() => {
+    isRecordingRef.current = isRecording
+  }, [isRecording])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -100,7 +114,8 @@ export function MessageComposer() {
         event.ctrlKey ||
         event.metaKey ||
         event.shiftKey ||
-        isEditable
+        isEditable ||
+        isRecordingRef.current
       ) {
         return
       }
@@ -112,7 +127,9 @@ export function MessageComposer() {
         voiceHoldTimerRef.current = null
         voiceShortcutActiveRef.current = true
         void start().then((started) => {
-          if (started && !voiceKeyHeldRef.current) void stop()
+          if (!started) return
+          recordingSourceRef.current = "shortcut"
+          if (!voiceKeyHeldRef.current) void stop()
         })
       }, 500)
     }
@@ -149,6 +166,14 @@ export function MessageComposer() {
 
   useEffect(() => {
     if (transcript === null) return
+    const recordingSource = recordingSourceRef.current
+    recordingSourceRef.current = null
+    if (recordingSource === "shortcut") {
+      send(transcript, false, "composer-asr")
+      return
+    }
+
+    toast.success("识别完成，文字已填入输入框。", { id: "composer-asr" })
     setExpanded(true)
     const textarea = textareaRef.current
     const current = valueRef.current
@@ -163,7 +188,7 @@ export function MessageComposer() {
       textarea?.setSelectionRange(nextCaretPosition, nextCaretPosition)
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [transcript])
+  }, [send, transcript])
 
   return (
     <>
@@ -186,7 +211,7 @@ export function MessageComposer() {
         />
         <span className="whitespace-nowrap text-xs font-medium" aria-live="polite">
           {isRecording
-            ? "正在录音，松开 V 识别"
+            ? "正在录音，松开 V 发送"
             : isRequesting
               ? "正在请求麦克风权限…"
               : recognizing
@@ -248,7 +273,7 @@ export function MessageComposer() {
               className={`${iconButtonClass} ${
                 isRecording ? "bg-destructive text-white hover:bg-destructive/90" : ""
               }`}
-              onClick={toggle}
+              onClick={handleMicToggle}
             >
               {recognizing || isRequesting ? (
                 <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
