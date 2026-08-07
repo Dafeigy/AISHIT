@@ -22,7 +22,15 @@ const MAX_RECORDING_MS = 60_000
 const MIN_RECORDING_SECONDS = 1
 const TAIL_FLUSH_MS = 800
 
-export function useRecorder() {
+interface RecorderOptions {
+  toastId?: string
+  successMessage?: string | null
+}
+
+export function useRecorder({
+  toastId = "voice-asr",
+  successMessage = "识别完成。",
+}: RecorderOptions = {}) {
   const [status, setStatus] = useState<RecorderStatus>("idle")
   const [recognizing, setRecognizing] = useState(false)
   const [transcript, setTranscript] = useState<string | null>(null)
@@ -34,21 +42,21 @@ export function useRecorder() {
 
   const recognize = useCallback(async (pcm: Int16Array) => {
     setRecognizing(true)
-    toast.loading("正在识别…", { id: "voice-asr" })
+    toast.loading("正在识别…", { id: toastId })
     try {
       const text = await recognizeSpeech(pcm)
       if (!mountedRef.current) return
       setTranscript(text)
-      toast.success("识别完成，正在发送…", { id: "voice-asr" })
+      if (successMessage) toast.success(successMessage, { id: toastId })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (!mountedRef.current) return
       setErrorMessage(message)
-      toast.error(message, { id: "voice-asr", duration: 10_000 })
+      toast.error(message, { id: toastId, duration: 10_000 })
     } finally {
       if (mountedRef.current) setRecognizing(false)
     }
-  }, [])
+  }, [successMessage, toastId])
 
   const stop = useCallback(
     async (reason: "manual" | "timeout" = "manual") => {
@@ -89,7 +97,9 @@ export function useRecorder() {
       if (mountedRef.current) setStatus("idle")
 
       if (duration < MIN_RECORDING_SECONDS) {
-        toast.warning(`录音过短（${duration.toFixed(2)} 秒），请说完后再停止。`)
+        toast.warning(`录音过短（${duration.toFixed(2)} 秒），请说完后再停止。`, {
+          id: toastId,
+        })
         return
       }
 
@@ -97,10 +107,11 @@ export function useRecorder() {
         reason === "timeout"
           ? "录音已达到 60 秒上限，正在自动识别。"
           : `录音完成（${duration.toFixed(2)} 秒），正在识别。`,
+        { id: toastId },
       )
       void recognize(pcm)
     },
-    [recognize],
+    [recognize, toastId],
   )
 
   const start = useCallback(async (): Promise<boolean> => {
@@ -161,12 +172,12 @@ export function useRecorder() {
       }
       setErrorMessage(message)
       setStatus("error")
-      toast.error(message)
+      toast.error(message, { id: toastId })
       return false
     } finally {
       startingRef.current = false
     }
-  }, [recognizing, stop])
+  }, [recognizing, stop, toastId])
 
   const toggle = useCallback(() => {
     if (status === "recording") void stop()

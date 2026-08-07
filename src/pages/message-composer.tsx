@@ -16,135 +16,56 @@ import { useRecorder } from "@/hooks/use-recorder"
 const iconButtonClass =
   "flex size-11 items-center justify-center rounded-full text-muted-foreground transition-colors duration-200 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 
-const HOLD_TO_TALK_DELAY_MS = 500
-
-function isEditableTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false
-  return (
-    target.isContentEditable ||
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement
-  )
-}
-
 export function MessageComposer() {
   const [expanded, setExpanded] = useState(false)
   const [value, setValue] = useState("")
-  const { status, recognizing, transcript, errorMessage, start, stop, toggle } = useRecorder()
+  const { status, recognizing, transcript, errorMessage, stop, toggle } = useRecorder({
+    toastId: "composer-asr",
+    successMessage: "识别完成，文字已填入输入框。",
+  })
   const isRecording = status === "recording"
   const isRequesting = status === "requesting"
-  const pressTimer = useRef<number | null>(null)
-  const spaceTimer = useRef<number | null>(null)
-  const spaceHeld = useRef(false)
-  const spaceShortcutActive = useRef(false)
-  const longPress = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  const clearPressTimer = () => {
-    if (pressTimer.current !== null) {
-      window.clearTimeout(pressTimer.current)
-      pressTimer.current = null
-    }
-  }
-
-  const handlePointerDown = () => {
-    longPress.current = false
-    clearPressTimer()
-    pressTimer.current = window.setTimeout(() => {
-      longPress.current = true
-      setExpanded(true)
-      toggle()
-    }, 520)
-  }
-
-  const handlePointerUp = () => clearPressTimer()
+  const valueRef = useRef("")
 
   const handleTriggerClick = () => {
-    if (longPress.current) {
-      longPress.current = false
-      return
-    }
     setExpanded(true)
   }
 
-  const send = useCallback((message: string, source: "text" | "voice" = "text") => {
+  const send = useCallback((message: string) => {
     const text = message.trim()
     if (!text) return
     toast.success("消息已发送", {
-      id: source === "voice" ? "voice-asr" : undefined,
       description: text,
     })
+    valueRef.current = ""
     setValue("")
-    if (source === "voice") {
-      window.requestAnimationFrame(() => textareaRef.current?.blur())
-    }
   }, [])
 
-  useEffect(() => clearPressTimer, [])
-
   useEffect(() => {
-    const clearSpaceTimer = () => {
-      if (spaceTimer.current === null) return
-      window.clearTimeout(spaceTimer.current)
-      spaceTimer.current = null
-    }
-
-    const releaseShortcut = () => {
-      const wasActive = spaceShortcutActive.current
-      spaceHeld.current = false
-      spaceShortcutActive.current = false
-      clearSpaceTimer()
-      if (wasActive) void stop()
-    }
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
-        event.code !== "Space" ||
+        event.code !== "KeyM" ||
+        !event.ctrlKey ||
         event.repeat ||
         event.altKey ||
-        event.ctrlKey ||
         event.metaKey ||
-        isEditableTarget(event.target) ||
-        spaceHeld.current ||
-        recognizing
+        event.shiftKey ||
+        isRequesting
       ) {
         return
       }
 
       event.preventDefault()
-      spaceHeld.current = true
-      spaceTimer.current = window.setTimeout(() => {
-        spaceTimer.current = null
-        spaceShortcutActive.current = true
-        setExpanded(true)
-        void start().then((started) => {
-          if (started && !spaceHeld.current) void stop()
-        })
-      }, HOLD_TO_TALK_DELAY_MS)
-    }
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (
-        event.code !== "Space" ||
-        (!spaceHeld.current && spaceTimer.current === null && !spaceShortcutActive.current)
-      ) {
-        return
-      }
-      event.preventDefault()
-      releaseShortcut()
+      setExpanded((current) => {
+        if (current && isRecording) void stop()
+        return !current
+      })
     }
 
     window.addEventListener("keydown", handleKeyDown)
-    window.addEventListener("keyup", handleKeyUp)
-    window.addEventListener("blur", releaseShortcut)
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown)
-      window.removeEventListener("keyup", handleKeyUp)
-      window.removeEventListener("blur", releaseShortcut)
-      releaseShortcut()
-    }
-  }, [recognizing, start, stop])
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [isRecording, isRequesting, stop])
 
   useEffect(() => {
     if (!expanded) return
@@ -154,16 +75,27 @@ export function MessageComposer() {
 
   useEffect(() => {
     if (transcript === null) return
-    setValue(transcript)
-    send(transcript, "voice")
-  }, [send, transcript])
+    const textarea = textareaRef.current
+    const current = valueRef.current
+    const selectionStart = Math.min(textarea?.selectionStart ?? current.length, current.length)
+    const selectionEnd = Math.min(textarea?.selectionEnd ?? selectionStart, current.length)
+    const nextValue = `${current.slice(0, selectionStart)}${transcript}${current.slice(selectionEnd)}`
+    const nextCaretPosition = selectionStart + transcript.length
+    valueRef.current = nextValue
+    setValue(nextValue)
+    const frame = window.requestAnimationFrame(() => {
+      textarea?.focus()
+      textarea?.setSelectionRange(nextCaretPosition, nextCaretPosition)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [transcript])
 
   return (
     <>
       <button
         type="button"
-        aria-label="展开消息输入框（长按空格键语音输入）"
-        title="长按空格键开始语音输入"
+        aria-label="展开消息输入框（Ctrl+M）"
+        title="展开消息输入框（Ctrl+M）"
         aria-expanded={expanded}
         disabled={expanded}
         className={`group absolute bottom-5 left-1/2 z-[101] flex size-14 -translate-x-1/2 items-center justify-center rounded-full border border-primary/20 bg-primary text-primary-foreground shadow-[0_16px_44px_rgba(15,23,42,0.3)] backdrop-blur-xl transition-[opacity,transform,background-color] duration-300 ease-out hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none sm:bottom-7 ${
@@ -172,9 +104,6 @@ export function MessageComposer() {
             : "pointer-events-auto translate-y-0 scale-100 opacity-100"
         }`}
         onClick={handleTriggerClick}
-        onPointerDown={handlePointerDown}
-        onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
       >
         <SparklesIcon
           className="size-5 transition-transform duration-200 group-hover:rotate-12"
@@ -193,7 +122,10 @@ export function MessageComposer() {
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => {
+            valueRef.current = event.target.value
+            setValue(event.target.value)
+          }}
           rows={3}
           disabled={!expanded}
           aria-label="消息内容"
@@ -227,7 +159,7 @@ export function MessageComposer() {
                     : "开始语音输入"
               }
               aria-pressed={isRecording}
-              title="点击录音，或在非编辑区域长按空格键"
+              title="点击开始或停止语音输入"
               className={`${iconButtonClass} ${
                 isRecording ? "bg-destructive text-white hover:bg-destructive/90" : ""
               }`}
@@ -266,12 +198,12 @@ export function MessageComposer() {
         </div>
         <p className="mt-2 min-h-4 px-1 text-xs text-muted-foreground" aria-live="polite">
           {isRecording
-            ? "正在录音，松开空格键或点击停止（最长 60 秒）"
+            ? "正在录音，点击麦克风停止（最长 60 秒）"
             : isRequesting
               ? "正在请求麦克风权限…"
             : recognizing
               ? "正在识别语音…"
-              : errorMessage ?? "长按空格键说话，松开后将自动识别并发送。"}
+              : errorMessage ?? "点击麦克风转写到输入框；Ctrl+M 展开或收起。"}
         </p>
       </section>
     </>
