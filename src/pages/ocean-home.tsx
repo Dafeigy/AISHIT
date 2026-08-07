@@ -4,13 +4,11 @@ import type { WindFarmAsset } from "@/src/data/turbine-mock-data"
 import { MessageComposer } from "@/src/pages/message-composer"
 import { OceanCanvas } from "@/src/pages/ocean-canvas"
 import { TurbineInfoDialog } from "@/src/pages/turbine-info-dialog"
-import { VoicePushToTalk } from "@/src/pages/voice-push-to-talk"
 
 export function OceanHome() {
   return (
     <main className="pointer-events-none relative flex h-full min-h-0 w-full flex-1 overflow-hidden text-white">
       <MessageComposer />
-      <VoicePushToTalk />
     </main>
   )
 }

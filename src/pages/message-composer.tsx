@@ -19,7 +19,7 @@ const iconButtonClass =
 export function MessageComposer() {
   const [expanded, setExpanded] = useState(false)
   const [value, setValue] = useState("")
-  const { status, recognizing, transcript, errorMessage, stop, toggle } = useRecorder({
+  const { status, recognizing, transcript, errorMessage, start, stop, toggle } = useRecorder({
     toastId: "composer-asr",
     successMessage: "识别完成，文字已填入输入框。",
   })
@@ -27,6 +27,9 @@ export function MessageComposer() {
   const isRequesting = status === "requesting"
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef("")
+  const voiceKeyHeldRef = useRef(false)
+  const voiceShortcutActiveRef = useRef(false)
+  const voiceHoldTimerRef = useRef<number | null>(null)
 
   const handleTriggerClick = () => {
     setExpanded(true)
@@ -68,6 +71,77 @@ export function MessageComposer() {
   }, [isRecording, isRequesting, stop])
 
   useEffect(() => {
+    const clearVoiceHoldTimer = () => {
+      if (voiceHoldTimerRef.current === null) return
+      window.clearTimeout(voiceHoldTimerRef.current)
+      voiceHoldTimerRef.current = null
+    }
+
+    const releaseVoiceShortcut = () => {
+      const wasActive = voiceShortcutActiveRef.current
+      voiceKeyHeldRef.current = false
+      voiceShortcutActiveRef.current = false
+      clearVoiceHoldTimer()
+      if (wasActive) void stop()
+    }
+
+    const handleVoiceKeyDown = (event: KeyboardEvent) => {
+      const target = event.target
+      const isEditable =
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement)
+
+      if (
+        event.code !== "KeyV" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isEditable
+      ) {
+        return
+      }
+
+      event.preventDefault()
+      if (event.repeat || voiceKeyHeldRef.current) return
+      voiceKeyHeldRef.current = true
+      voiceHoldTimerRef.current = window.setTimeout(() => {
+        voiceHoldTimerRef.current = null
+        voiceShortcutActiveRef.current = true
+        void start().then((started) => {
+          if (started && !voiceKeyHeldRef.current) void stop()
+        })
+      }, 500)
+    }
+
+    const handleVoiceKeyUp = (event: KeyboardEvent) => {
+      if (
+        event.code !== "KeyV" ||
+        (!voiceKeyHeldRef.current &&
+          voiceHoldTimerRef.current === null &&
+          !voiceShortcutActiveRef.current)
+      ) {
+        return
+      }
+      event.preventDefault()
+      releaseVoiceShortcut()
+    }
+
+    window.addEventListener("keydown", handleVoiceKeyDown)
+    window.addEventListener("keyup", handleVoiceKeyUp)
+    window.addEventListener("blur", releaseVoiceShortcut)
+    return () => {
+      window.removeEventListener("keydown", handleVoiceKeyDown)
+      window.removeEventListener("keyup", handleVoiceKeyUp)
+      window.removeEventListener("blur", releaseVoiceShortcut)
+      releaseVoiceShortcut()
+    }
+  }, [start, stop])
+
+  useEffect(() => {
     if (!expanded) return
     const frame = window.requestAnimationFrame(() => textareaRef.current?.focus())
     return () => window.cancelAnimationFrame(frame)
@@ -75,6 +149,7 @@ export function MessageComposer() {
 
   useEffect(() => {
     if (transcript === null) return
+    setExpanded(true)
     const textarea = textareaRef.current
     const current = valueRef.current
     const selectionStart = Math.min(textarea?.selectionStart ?? current.length, current.length)
@@ -98,25 +173,35 @@ export function MessageComposer() {
         title="展开消息输入框（Ctrl+M）"
         aria-expanded={expanded}
         disabled={expanded}
-        className={`group absolute bottom-5 left-1/2 z-[101] flex size-14 -translate-x-1/2 items-center justify-center rounded-full border border-primary/20 bg-primary text-primary-foreground shadow-[0_16px_44px_rgba(15,23,42,0.3)] backdrop-blur-xl transition-[opacity,transform,background-color] duration-300 ease-out hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none sm:bottom-7 ${
+        className={`group absolute bottom-5 left-1/2 z-[101] flex h-11 -translate-x-1/2 items-center justify-center gap-2 rounded-full border border-primary/20 bg-primary px-4 text-primary-foreground shadow-[0_12px_32px_rgba(15,23,42,0.26)] backdrop-blur-xl transition-[opacity,transform,background-color] duration-300 ease-out hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none sm:bottom-7 ${
           expanded
-            ? "pointer-events-none translate-y-3 scale-75 opacity-0"
+            ? "pointer-events-none translate-y-2 scale-90 opacity-0"
             : "pointer-events-auto translate-y-0 scale-100 opacity-100"
         }`}
         onClick={handleTriggerClick}
       >
         <SparklesIcon
-          className="size-5 transition-transform duration-200 group-hover:rotate-12"
+          className="size-4 shrink-0 transition-transform duration-200 group-hover:rotate-12"
           aria-hidden="true"
         />
+        <span className="whitespace-nowrap text-xs font-medium" aria-live="polite">
+          {isRecording
+            ? "正在录音，松开 V 识别"
+            : isRequesting
+              ? "正在请求麦克风权限…"
+              : recognizing
+                ? "正在识别语音…"
+                : "输入消息 · 按住 V 说话"}
+        </span>
       </button>
 
       <section
         aria-hidden={!expanded}
-        className={`absolute inset-x-3 bottom-4 z-[100] mx-auto max-w-4xl origin-bottom rounded-2xl border border-border/80 bg-background/90 p-3 text-foreground shadow-[0_20px_70px_rgba(15,23,42,0.24)] backdrop-blur-2xl transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none sm:inset-x-6 sm:bottom-6 sm:rounded-[22px] sm:p-4 ${
+        data-expanded={expanded}
+        className={`composer-panel absolute inset-x-3 bottom-4 z-[100] mx-auto max-w-4xl origin-bottom rounded-2xl border border-border/80 bg-background/90 p-3 text-foreground shadow-[0_20px_70px_rgba(15,23,42,0.24)] backdrop-blur-2xl motion-reduce:transition-none sm:inset-x-6 sm:bottom-6 sm:rounded-[22px] sm:p-4 ${
           expanded
-            ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
-            : "pointer-events-none translate-y-6 scale-[0.96] opacity-0"
+            ? "pointer-events-auto opacity-100"
+            : "pointer-events-none opacity-0"
         }`}
       >
         <textarea
